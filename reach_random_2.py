@@ -1,29 +1,15 @@
 import gymnasium as gym
-from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
 from Reach_env_2 import IRB360Env
 import numpy as np
 
-def random_exploration_with_stable_baselines3(seed=None):
+def random_exploration_with_stable_baselines3(seed = None):
     np.random.seed(7)  # 设置随机种子
     # 创建环境实例
-    env = IRB360Env(render_mode='human', seed=seed)
+    env = IRB360Env(render_mode='human',seed=seed)
 
     # 检查环境是否符合稳定基线的要求
     check_env(env)
-
-    # 创建评估回调
-    eval_callback = EvalCallback(env, best_model_save_path='./logs/', log_path='./logs/', eval_freq=1000, deterministic=True, render=False)
-
-    # 创建检查点回调
-    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path='./logs/', name_prefix='rl_model')
-
-    # 创建模型
-    model = PPO('MlpPolicy', env, verbose=1)
-
-    # 训练模型
-    model.learn(total_timesteps=1000, callback=[eval_callback, checkpoint_callback])
 
     # 重置环境以获得初始状态
     obs, info = env.reset()

@@ -34,13 +34,18 @@ class IRB360Env(gym.Env):
         存在的不足：  没有每一步的详细信息，如末端执行器的速度、末端执行器的姿态、末端执行器的力、末端执行器的扭矩等。
                     训练过程无法看到完整流程
                     末端执行器边界设定：最好能获取一个末端执行器的运动区域，以便在训练过程中控制末端执行器的运动范围。或是关节角度，哪个关节角度偏转过于严重，导致末端执行器无法运动。就设定重启
+    
+    
+        修改：逆运动状态监测的添加，step函数内状态终止的判断
+    
     """
     
     def __init__(self, 
                  tstep=0.05, 
                  distance_threshold=0.1,
                  max_steps=1000,
-                 render_mode=None):
+                 render_mode=None,
+                 seed=None):
         """初始化环境参数和连接仿真"""
         super().__init__()
         
@@ -50,7 +55,11 @@ class IRB360Env(gym.Env):
         self.step_times = []
         
         # 添加速度计算所需的历史位置
-        self.last_position = None
+        self.current_Pad = None  # 末端当前位置
+        self.current_Block = None   # 物块位置
+        self.last_Pad = None    # 上一次的位置
+        self.distance = None         # 当前距离
+        self.relative_distance = None  # 相对距离
         self.last_time = None
         
         # 配置参数
@@ -59,6 +68,7 @@ class IRB360Env(gym.Env):
         self.max_steps = max_steps
         self.current_step = 0
         self.render_mode = render_mode
+        self.seed(seed)
         
         # 仿真环境特有，基于coppeliasim的逆运动稳定标志计数器，充当边界监控
         self.ik_stability_counter = 0
@@ -127,19 +137,21 @@ class IRB360Env(gym.Env):
         
         # 重置内部状态
         self.current_step = 0
-        self.last_position = None
+        self.current_Pad = None
         self.last_time = None
         self.reward_history = []
         self.distance_history = []
         self.step_times = []
+        self.terminated = False
+        self.truncated = False
         
         # 重置机器人位置
         self.call_script_function('moveBack')
         # self.call_script_function('resetPosition')
 
         # 随机化物块位置
-        self.randomize_block_position()
-        self.terminated = False
+        self.current_Block = self.randomize_block_position()
+        
         # 获取初始观测
         self.state = self._get_extended_observation()
         
@@ -158,8 +170,17 @@ class IRB360Env(gym.Env):
             额外信息(info):字典,包含其他可能有用的信息
 
             """
+        # 检查结束或截断状态，重置环境判定（进入下一个循环）
+        if self.terminated or self.truncated:
+            self.reset()
+            return self.state, 0.0, True, True, {'episode_status': 'reset'}
+        # 位置信息更新    
+
+        self.last_Pad = self.current_Pad
+        # 计算距离
+        self.calculate_distances()
+        # 时间步计数器 
         self.current_step += 1
-        
         # 动作映射
         action_map = {
             0: 'moveUp', 1: 'moveDown', 
@@ -170,29 +191,33 @@ class IRB360Env(gym.Env):
         function_name = action_map.get(action)
         if not function_name:
             logging.error("Invalid action")
-            return None, 0.0, True, False, {}
+            return self.state, 0.0, self.terminated, self.truncated, {}
         # 执行动作
         res = self.call_script_function(function_name)
         
         # 获取新状态
-        new_position = self.get_current_position(self.handles['pad'])
+        self.current_Pad = self.get_current_position(self.handles['pad'])
+        
         # 检查逆运动学稳定性
         ik_status = self.check_ik_stability()
         if not ik_status['is_stable']:
             self.ik_stability_counter += 1
-        if self.ik_stability_counter >= 3:
-            logging.warning("IK is not stable, resetting environment.")
-            self.terminated = True
-            truncated = True
-            self.ik_stability_counter = 0
+            logging.warning(f"IK stability counter: {self.ik_stability_counter}")
         else:
-            truncated = False
+            # 不稳定计数器清零
+            self.ik_stability_counter = 0
+        if self.ik_stability_counter >= 2:
+            logging.warning("IK is not stable, truncating current episode and resetting environment.")
+            self.truncated = True
+            self.ik_stability_counter = 0
+            return self.state, 0.0, self.terminated, self.truncated, {'episode_status': 'unstable_ik'}
+        
         # 计算奖励
-        reward = float(self._calculate_reward(new_position))
+        reward = float(self._calculate_reward(self.current_Pad))
         
         # 判断是否结束
-        self.terminated = bool(self._is_terminated(new_position))
-        truncated = bool(self.current_step >= self.max_steps)
+        self.terminated = bool(self._is_terminated(self.current_Pad))
+        self.truncated = bool(self.current_step >= self.max_steps)
         
         # 更新状态
         self.state = self._get_extended_observation()
@@ -204,10 +229,10 @@ class IRB360Env(gym.Env):
             'distance_to_block': distance,
             'reward': reward,
             'terminated':self.terminated,
-            'truncated': truncated
+            'truncated': self.truncated
         }
         
-        return self.state, reward,self.terminated, truncated, info
+        return self.state, reward,self.terminated, self.truncated, info
 
     
     def _get_extended_observation(self):
@@ -223,10 +248,13 @@ class IRB360Env(gym.Env):
         - 归一化步数            (1)
         """
         """获取观测，并确保返回float32类型"""
-        pad_pos = np.array(self.get_current_position(self.handles['pad']), dtype=np.float32)
-        block_pos = np.array(self.get_current_position(self.handles['block']), dtype=np.float32)
+        
+        pad_pos = np.array(self.current_Pad, dtype=np.float32)
+        
+        block_pos = np.array(self.current_Block, dtype=np.float32)
         relative_pos = np.array(block_pos) - np.array(pad_pos)
-        distance = np.linalg.norm(relative_pos)
+        
+        self.calculate_distances()
         velocity = self._calculate_velocity()
         
         # 获取姿态信息
@@ -234,7 +262,7 @@ class IRB360Env(gym.Env):
             self.client_id, 
             self.handles['pad'], 
             -1, 
-            sim.simx_opmode_oneshot_wait
+            sim.simx_opmode_oneshot_wait            
         )
         orientation = np.array(orientation, dtype=np.float32)
         observation = np.concatenate([
@@ -243,13 +271,10 @@ class IRB360Env(gym.Env):
             relative_pos,      # 相对位置 (3)
             velocity,          # 速度信息 (3)
             orientation,       # 姿态信息 (3)
-            [distance],        # 距离 (1)
+            [self.distance],        # 距离 (1)
             [np.float32(self.current_step) / self.max_steps]  # 归一化步数 (1)
              ]).astype(np.float32)  # 确保最终结果为float32
         return observation    
-
-        
-    
     
     def call_script_function(self, function_name: str, ints=None, floats=None, strings=None, bytes=None, opmode=sim.simx_opmode_oneshot) -> int:
         """调用仿真环境中的脚本函数"""
@@ -279,36 +304,39 @@ class IRB360Env(gym.Env):
     
     def randomize_block_position(self):
         """随机化物块位置"""
-        current_position = self.get_current_position(self.handles['block'])
-        logging.info(f"Before Randomize Block Position: {current_position}")
-        # current_pad_position = self.get_current_position(self.handles['pad'])
-        # logging.info(f"Before Randomize Pad Position: {current_pad_position}")
+        self.current_Block = self.get_current_position(self.handles['block'])
+        self.current_Pad = self.get_current_position(self.handles['pad'])
+
+        logging.info(f"Before Randomize Block Position: {self.current_Block}")
+        # 随机化物块位置
         
-        if current_position is not None:
-            workspace_center = [0, 0, 0]
+        if self.current_Block is not None:
+            # workspace_center = [0, 0, 0]
             workspace_size = [0.4, 0.4, 0.2]
             new_position = [
-                current_position[i] + self.np_random.uniform(-workspace_size[i]/2, workspace_size[i]/2)
+                self.current_Block[i] + self.np_random.uniform(-workspace_size[i]/2, workspace_size[i]/2)
                 for i in range(3)
             ]
             sim.simxSetObjectPosition(self.client_id, self.handles['block'], -1, new_position, sim.simx_opmode_oneshot)
+            
+            return new_position 
         else:
             logging.warning("Failed to get current position of the block.")
-    
+            
     def _calculate_velocity(self):
         """计算末端执行器速度"""
-        current_position = self.get_current_position(self.handles['pad'])
+        current_position = self.current_Pad
         current_time = time.time()
         
-        if self.last_position is not None and self.last_time is not None:
+        if self.last_Pad is not None and self.last_time is not None:
             dt = current_time - self.last_time
             if dt > 0:
-                velocity = (np.array(current_position) - np.array(self.last_position)) / dt
-                self.last_position = current_position
+                velocity = (np.array(current_position) - np.array(self.last_Pad)) / dt
+                self.last_Pad = current_position
                 self.last_time = current_time
                 return velocity
         
-        self.last_position = current_position
+        self.last_Pad = current_position
         self.last_time = current_time
         return np.zeros(3)
 
@@ -332,11 +360,11 @@ class IRB360Env(gym.Env):
     
     def _calculate_reward(self, new_position):
         """改进的奖励计算"""
-        block_position = self.get_current_position(self.handles['block'])
-        distance = np.linalg.norm(np.array(new_position) - np.array(block_position))
+        block_position = self.current_Block
+        # distance = np.linalg.norm(np.array(new_position) - np.array(block_position))
         
         # 多目标奖励
-        proximity_reward = 1.0 / (1.0 + distance)  # 距离奖励
+        proximity_reward = 1.0 / (1.0 + self.distance)  # 距离奖励
         orientation_reward = self._calculate_orientation_reward()  # 姿态奖励
         efficiency_reward = 1.0 / (1.0 + self.current_step)  # 效率奖励
         
@@ -353,7 +381,7 @@ class IRB360Env(gym.Env):
         
         # 记录历史数据
         self.reward_history.append(total_reward)
-        self.distance_history.append(distance)
+        self.distance_history.append(self.distance)
         
         return total_reward
     
@@ -366,8 +394,11 @@ class IRB360Env(gym.Env):
         
         return distance < self.distance_threshold
     
-
-
+    def calculate_distances(self):
+        """计算并更新间距和相对间距"""
+        if self.current_Pad is not None and self.current_Block is not None:
+            self.relative_distance = np.array(self.current_Block) - np.array(self.current_Pad)
+            self.distance = np.linalg.norm(self.relative_distance)
     def check_ik_stability(self):
         """
         检查机械臂的逆运动学求解状态
@@ -441,9 +472,6 @@ class IRB360Env(gym.Env):
             plt.tight_layout()
             plt.pause(0.1)  # 刷新图像
 
-
-
-
     def stop_simulation(self) -> bool:
             """停止仿真"""
             logging.info("Stopping simulation...")
@@ -457,3 +485,11 @@ class IRB360Env(gym.Env):
         
         # 关闭连接
         sim.simxFinish(self.client_id)
+        
+        
+        
+    def seed(self,seed = None):
+        """设置随机数种子"""
+        """设置随机数生成器的种子"""
+        self.np_random = np.random.default_rng(seed)
+        return [seed]
