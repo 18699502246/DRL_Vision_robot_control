@@ -12,7 +12,7 @@ class IRB360Controller:
     # 连接到远程API服务器
     def connect(self):
         sim.simxFinish(-1)  # 关闭所有连接
-        self.clientID = sim.simxStart('127.0.0.1', 19999, True, True, 5000, 5)
+        self.clientID = sim.simxStart('127.0.0.1', 19997, True, True, 5000, 5)
         if self.clientID != -1:
             print('Connected to remote API server')
             return True
@@ -30,23 +30,8 @@ class IRB360Controller:
 
     # 调用脚本函数
     def call_script_function(self, function_name, ints=[], floats=[], strings=[], bytes=bytearray()):
-        result, ints_ret, floats_ret, strings_ret, bytes_ret = sim.simxCallScriptFunction(
-            self.clientID, 
-            self.robot_name, 
-            self.script_type, 
-            function_name, 
-            ints, floats, strings, bytes, 
-            sim.simx_opmode_oneshot_wait
-        )
+        return sim.simxCallScriptFunction(self.clientID, self.robot_name, self.script_type, function_name, ints, floats, strings, bytes, sim.simx_opmode_oneshot_wait)
 
-        # 构建返回的信息字典
-        info = {
-            'result': ints_ret[0] if ints_ret else None,
-            'newPosition': floats_ret if floats_ret else None,
-            'message': strings_ret[0] if strings_ret else None
-        }
-
-        return [info]
     # 获取对象位置
     def get_object_position(self, object_name):
         result, handle = sim.simxGetObjectHandle(self.clientID, object_name, sim.simx_opmode_oneshot_wait)
@@ -59,25 +44,8 @@ class IRB360Controller:
             return None
         return position
 
+
     # 移动机器人
-    # def move(self, direction):
-    #     function_name = {
-    #         'up': 'moveUp',
-    #         'down': 'moveDown',
-    #         'left': 'moveLeft',
-    #         'right': 'moveRight',
-    #         'forward': 'moveForward',
-    #         'backward': 'moveBackward'
-    #     }.get(direction.lower())
-
-    #     if function_name:
-            
-    #         return self.call_script_function(function_name)
-    #     else:
-    #         print(f"Invalid direction: {direction}")
-    #         return None
-
-
     def move(self, direction):
         function_name = {
             'up': 'moveUp',
@@ -89,22 +57,54 @@ class IRB360Controller:
         }.get(direction.lower())
 
         if function_name:
-            # 调用脚本函数并获取返回值
-            info = self.call_script_function(function_name)
             
-            # 打印详细信息
-            if info and isinstance(info[0], dict):
-                result_info = info[0]
-                print(f"Move {direction} result:")
-                print(f"Result: {result_info.get('result', 'Unknown')}")
-                print(f"Message: {result_info.get('message', 'No message')}")
-                print(f"New Position: {result_info.get('newPosition', 'Unknown')}")
-            
-            return info
+            return self.call_script_function(function_name)
         else:
             print(f"Invalid direction: {direction}")
             return None
 
+
+    def check_ik_stability(self):
+        """
+        检查机械臂的逆运动学求解状态
+        
+        Returns:
+        - is_stable: 布尔值，表示机械臂是否稳定
+        - result: IK求解器状态码
+        - message: 状态描述
+        """
+        result, ints_ret, floats_ret, strings_ret, bytes_ret = sim.simxCallScriptFunction(
+            clientID=self.clientID, 
+            scriptDescription=self.robot_name,
+            options=self.script_type,
+            functionName='checkIKStatus',
+            inputInts=[],
+            inputFloats=[],
+            inputStrings=[],
+            inputBuffer=bytearray(),
+            operationMode=sim.simx_opmode_oneshot
+        )
+
+        if ints_ret:
+            ik_status = {
+                'is_stable': ints_ret[0] == 1,
+                'result': ints_ret[0],
+                'message': strings_ret[0] if strings_ret else 'No message'
+            }
+            
+            print("IK Stability Check:")
+            print(f"Stable: {ik_status['is_stable']}")
+            print(f"Result Code: {ik_status['result']}")
+            print(f"Message: {ik_status['message']}")
+            
+            return ik_status
+        else:
+            print("Failed to check IK stability")
+            return {
+                'is_stable': False,
+                'result': None,
+                'message': 'Check failed'
+            }
     # 重置机器人位置
     def reset_position(self):
         return self.call_script_function('resetToInitialPosition')
@@ -116,7 +116,8 @@ class IRB360Controller:
 
     # 设置逆运动学模式
     def set_ik_mode(self, enable):
-        function_name = 'enableIkMode' if enable else 'disableIkMode'
+        function_name = 'setIkMode' if enable else 'setFkMode'
+        # function_name = 'enableIkMode' if enable else 'disableIkMode'
         return self.call_script_function(function_name)
 
     
@@ -160,9 +161,21 @@ def main():
 
     try:
         controller.start_simulation()
-        controller.set_ik_mode(True)
+        # time.sleep(1)
+        # controller.set_ik_mode(True)
 
         # 示例操作序列
+        controller.move('right')
+        # controller.check_ik_stability()
+        # controller.check_ik_stability()
+        # controller.check_ik_stability()
+
+        # print(controller.move('left'))
+        time.sleep(1)
+        move_result = controller.move('up')
+        print(move_result)
+        # controller.call_script_function( 'move', ints=[1], floats=[0,0,0.05], strings=[], bytes=bytearray())
+        # controller.call_script_function(function_name='move',floats= [0, 0, 0.05])
         time.sleep(1)
         controller.control_suction_pad(True)
         time.sleep(1)
@@ -171,25 +184,30 @@ def main():
         controller.control_suction_pad(False)
         time.sleep(1)
         controller.set_ik_mode(False)
-        controller.reset_position()
+        
+        # controller.check_ik_stability()
         controller.set_ik_mode(True)
         controller.move('left')
         controller.move('left')
         controller.move('left')
         time.sleep(1)
         controller.move('up')
-        controller.move('up')
-        controller.move('up')
-        controller.move('up')
-        controller.move('up')
-        controller.move('up')
-        controller.move('up')
-        controller.move('up')
+        controller.reset_position()
+        # controller.call_script_function('resetPosition')
 
-        
+        # controller.move2('up')
+        controller.move('up')
+        controller.move('up')
+        controller.move('up')
+        controller.move('up')
+        controller.move('up')
+        controller.move('up')
+        controller.move('up')
+        controller.call_script_function('moveBack')
+        controller.move('up')
         time.sleep(1)
         controller.set_ik_mode(False)
-        controller.reset_position()
+        # controller.reset_position()
         # controller.reset_to_initial_position()
         controller.set_ik_mode(True)
         # 获取末端执行器位置

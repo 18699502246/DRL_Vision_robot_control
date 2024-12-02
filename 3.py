@@ -2,7 +2,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv
-from Reach_env import IRB360Env
+from Reach_env_2 import IRB360Env
 
 def train_ppo_on_irb360():
     # 创建环境实例

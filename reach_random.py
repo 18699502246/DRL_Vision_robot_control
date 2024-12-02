@@ -1,53 +1,72 @@
 import gymnasium as gym
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
-from Reach_env_2 import IRB360Env
 import numpy as np
+import time
+import pygame
 
-def random_exploration_with_stable_baselines3(seed=None):
-    np.random.seed(7)  # 设置随机种子
+# 导入自定义环境
+from Reach_env_2 import IRB360Env
+
+def main():
+    # 初始化pygame
+    pygame.init()
+    screen = pygame.display.set_mode((640, 480))
+    pygame.display.set_caption("IRB360Env Control")
+
     # 创建环境实例
-    env = IRB360Env(render_mode='human', seed=seed)
-
-    # 检查环境是否符合稳定基线的要求
-    check_env(env)
-
-    # 创建评估回调
-    eval_callback = EvalCallback(env, best_model_save_path='./logs/', log_path='./logs/', eval_freq=1000, deterministic=True, render=False)
-
-    # 创建检查点回调
-    checkpoint_callback = CheckpointCallback(save_freq=1000, save_path='./logs/', name_prefix='rl_model')
-
-    # 创建模型
-    model = PPO('MlpPolicy', env, verbose=1)
-
-    # 训练模型
-    model.learn(total_timesteps=1000, callback=[eval_callback, checkpoint_callback])
-
-    # 重置环境以获得初始状态
-    obs, info = env.reset()
-    random_exploration_steps = 1000  # 随机探索的时间步数
+    env = IRB360Env(tstep=0.05, distance_threshold=0.1, max_steps=1000, render_mode='human')
 
     try:
-        # 随机探索阶段
-        for _ in range(random_exploration_steps):
-            action = env.action_space.sample()  # 随机选择动作
-            obs, reward, terminated, truncated, info = env.step(action)  # 执行动作
-            
-            # 输出反馈信息
-            print(f"状态: {obs}, 奖励: {reward}, 完成标志: {terminated}, 中断标志: {truncated}, 信息: {info}")
+        # 重置环境
+        state, _ = env.reset()
+        print(f"Initial state: {state}")
 
-            # 如果环境完成或中断，重置
-            if terminated or truncated:
-                obs, info = env.reset()
+        running = True
+        while running:
+            # 显示当前状态
+            print(f"Current state: {state}")
 
-    except Exception as e:
-        print(f"探索过程中出现异常: {e}")
+            # 处理事件
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_w:
+                        action = 0
+                    elif event.key == pygame.K_s:
+                        action = 1
+                    elif event.key == pygame.K_a:
+                        action = 2
+                    elif event.key == pygame.K_d:
+                        action = 3
+                    elif event.key == pygame.K_q:
+                        action = 4
+                    elif event.key == pygame.K_e:
+                        action = 5
+                    else:
+                        continue
+
+                    # 执行动作
+                    state, reward, terminated, truncated, info = env.step(action)
+                    print(f"Action: {action}, Reward: {reward}, Terminated: {terminated}, Truncated: {truncated}, Info: {info}")
+
+                    # 检查是否需要重置环境
+                    if terminated or truncated:
+                        print("Episode ended. Resetting environment...")
+                        state, _ = env.reset()
+
+                    # 渲染环境
+                    env.render()
+
+                    # 适当延时以观察效果
+                    time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("Test interrupted by user.")
 
     finally:
         # 关闭环境
         env.close()
+        pygame.quit()
 
 if __name__ == "__main__":
-    random_exploration_with_stable_baselines3()
+    main()

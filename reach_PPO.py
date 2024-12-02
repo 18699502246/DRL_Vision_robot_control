@@ -2,7 +2,8 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.vec_env import DummyVecEnv
-from Reach_env import IRB360Env
+from Reach_env_2 import IRB360Env
+from stable_baselines3.common.monitor import Monitor
 
 """
     当前不足：运行没有反馈信息，不知道运行到第几步了，需要添加进度条显示
@@ -12,7 +13,8 @@ from Reach_env import IRB360Env
 def train_ppo_on_irb360():
     # 创建环境实例
     env = IRB360Env(render_mode='human')
-
+    
+    env = Monitor(env)
     # 检查环境
     check_env(env, warn=True)
 
@@ -35,7 +37,7 @@ def train_ppo_on_irb360():
 
     try:
         # 开始训练
-        model.learn(total_timesteps=100)
+        model.learn(total_timesteps=10000)
 
         # 保存模型
         model.save("ppo_irb360")

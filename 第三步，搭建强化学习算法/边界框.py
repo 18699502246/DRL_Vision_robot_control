@@ -44,7 +44,8 @@ class IRB360Env(gym.Env):
                  tstep=0.05, 
                  distance_threshold=0.1,
                  max_steps=1000,
-                 render_mode=None):
+                 render_mode=None,
+                 seed=None):
         """初始化环境参数和连接仿真"""
         super().__init__()
         
@@ -56,6 +57,7 @@ class IRB360Env(gym.Env):
         # 添加速度计算所需的历史位置
         self.current_Pad = None  # 末端当前位置
         self.current_Block = None   # 物块位置
+        self.current_Boundary = None  # 边界框的中心位置
         self.last_Pad = None    # 上一次的位置
         self.distance = None         # 当前距离
         self.relative_distance = None  # 相对距离
@@ -67,9 +69,10 @@ class IRB360Env(gym.Env):
         self.max_steps = max_steps
         self.current_step = 0
         self.render_mode = render_mode
+        self.seed(seed)
+        self.Boundary_size = [0.9, 0.9, 0.6]  # 边界框的尺寸
+
         
-        # 仿真环境特有，基于coppeliasim的逆运动稳定标志计数器，充当边界监控
-        self.ik_stability_counter = 0
         # 日志配置
         logging.basicConfig(level=logging.INFO)
         
@@ -79,8 +82,12 @@ class IRB360Env(gym.Env):
         self.script_type = sim.sim_scripttype_childscript
         
         # 连接并设置仿真环境
-        self.connect()
         
+        self.connect()
+        # self.stop_simulation()
+        time.sleep(2)
+        self.start_simulation()
+        time.sleep(2)
         # 动作和观测空间的定义
         self.action_space = spaces.Discrete(6)
         self.observation_space = spaces.Box(low=-2.0, high=2.0, shape=(17,), dtype=np.float32)
@@ -90,7 +97,8 @@ class IRB360Env(gym.Env):
             'block': None,
             'ik_tip': None,
             'base': None,
-            'pad': None
+            'pad': None,
+            'boundary': None
         }
         self.state = None
         
@@ -100,60 +108,6 @@ class IRB360Env(gym.Env):
         # 随机数生成器
         self.np_random = np.random.default_rng()
     
-    def connect(self):
-        """连接到仿真环境"""
-        sim.simxFinish(-1)
-        self.client_id = sim.simxStart('127.0.0.1', 19999, True, True, 5000, 5)
-        
-        if self.client_id == -1:
-            logging.error('Failed to connect to remote API server')
-            raise RuntimeError("Simulation connection failed")
-        
-        logging.info('Connected to remote API server')
-        return True
-    
-    def setup_simulation(self):
-        """设置仿真环境参数"""
-        sim.simxSetFloatingParameter(self.client_id, sim.sim_floatparam_simulation_time_step, self.tstep, sim.simx_opmode_oneshot)
-        sim.simxSynchronous(self.client_id, True)
-        
-        handle_names = {
-            'block': 'Cuboid',
-            'ik_tip': 'irb360_ikTip', 
-            'base': 'irb360Base',
-            'pad': 'suctionPadLoopClosureDummy2'
-        }
-        
-        for key, name in handle_names.items():
-            self.handles[key] = sim.simxGetObjectHandle(self.client_id, name, sim.simx_opmode_oneshot_wait)[1]
-    
-    def reset(self, seed=None, options=None):
-        """重置环境
-            目标随机化，末端执行器位置初始化
-        """
-        super().reset(seed=seed)
-        
-        # 重置内部状态
-        self.current_step = 0
-        self.current_Pad = None
-        self.last_time = None
-        self.reward_history = []
-        self.distance_history = []
-        self.step_times = []
-        self.terminated = False
-        self.truncated = False
-        
-        # 重置机器人位置
-        self.call_script_function('moveBack')
-        # self.call_script_function('resetPosition')
-
-        # 随机化物块位置
-        self.current_Block = self.randomize_block_position()
-        
-        # 获取初始观测
-        self.state = self._get_extended_observation()
-        
-        return self.state, {}
     
     def step(self, action):
         """执行动作
@@ -198,17 +152,17 @@ class IRB360Env(gym.Env):
         
         # 检查逆运动学稳定性
         ik_status = self.check_ik_stability()
-        if not ik_status['is_stable']:
-            self.ik_stability_counter += 1
-            logging.warning(f"IK stability counter: {self.ik_stability_counter}")
-        else:
-            # 不稳定计数器清零
-            self.ik_stability_counter = 0
-        if self.ik_stability_counter >= 3:
+        if not ik_status:
             logging.warning("IK is not stable, truncating current episode and resetting environment.")
             self.truncated = True
-            self.ik_stability_counter = 0
             return self.state, 0.0, self.terminated, self.truncated, {'episode_status': 'unstable_ik'}
+        
+        # 检查末端执行器是否在边界内
+        if not self.check_within_boundary(self.current_Pad):
+            logging.warning("End effector out of boundary, resetting environment.")
+            self.truncated = True  # 或者设置 terminated = True
+            return self.reset()[0], 0.0, False, True, {'episode_status': 'boundary_exceeded'}
+
         
         # 计算奖励
         reward = float(self._calculate_reward(self.current_Pad))
@@ -231,7 +185,67 @@ class IRB360Env(gym.Env):
         }
         
         return self.state, reward,self.terminated, self.truncated, info
+    
+    def connect(self):
+        """连接到仿真环境"""
+        sim.simxFinish(-1)
+        self.client_id = sim.simxStart('127.0.0.1', 19999, True, True, 5000, 5)
+        
+        if self.client_id == -1:
+            logging.error('Failed to connect to remote API server')
+            raise RuntimeError("Simulation connection failed")
+        
+        logging.info('Connected to remote API server')
+        return True
+    
+    def setup_simulation(self):
+        """设置仿真环境参数"""
+        sim.simxSetFloatingParameter(self.client_id, sim.sim_floatparam_simulation_time_step, self.tstep, sim.simx_opmode_oneshot)
+        sim.simxSynchronous(self.client_id, True)
+        
+        handle_names = {
+            'block': 'Cuboid',
+            'ik_tip': 'irb360_ikTip', 
+            'base': 'irb360Base',
+            'pad': 'suctionPadLoopClosureDummy2',
+            'boundary':'Boundary'
+        }
+        
+        for key, name in handle_names.items():
+            self.handles[key] = sim.simxGetObjectHandle(self.client_id, name, sim.simx_opmode_oneshot_wait)[1]
+        self.current_Boundary = self.get_current_position(self.handles['boundary'])
+        logging.info(f"Boundary center position: {self.current_Boundary}")
+    def reset(self, seed=None, options=None):
+        """重置环境
+            目标随机化，末端执行器位置初始化
+        """
+        super().reset(seed=seed)
+        
+        # 重置内部状态
+        self.current_step = 0
+        self.current_Pad = None
+        self.last_time = None
+        self.reward_history = []
+        self.distance_history = []
+        self.step_times = []
+        self.terminated = False
+        self.truncated = False
+        
+        # 重置机器人位置
+        
+        # time.sleep(0.1)
+        # self.call_script_function('resetPosition')
+        # self.call_script_function('resetPad')
+        self.call_script_function('moveBack')
+        
 
+        # 随机化物块位置
+        self.current_Block = self.randomize_block_position()
+        
+        # 获取初始观测
+        self.state = self._get_extended_observation()
+        
+        return self.state, {}
     
     def _get_extended_observation(self):
         """
@@ -302,19 +316,21 @@ class IRB360Env(gym.Env):
     
     def randomize_block_position(self):
         """随机化物块位置"""
-        self.current_Block = self.get_current_position(self.handles['block'])
+        self.current_Pad = self.get_current_position(self.handles['pad'])
+        self.current_Boundary = self.get_current_position(self.handles['boundary'])
         logging.info(f"Before Randomize Block Position: {self.current_Block}")
         # 随机化物块位置
         
-        if self.current_Block is not None:
+        if self.current_Boundary is not None:
             # workspace_center = [0, 0, 0]
             workspace_size = [0.4, 0.4, 0.2]
             new_position = [
-                self.current_Block[i] + self.np_random.uniform(-workspace_size[i]/2, workspace_size[i]/2)
+                self.current_Boundary[i] + self.np_random.uniform(-workspace_size[i]/2, workspace_size[i]/2)
                 for i in range(3)
             ]
+            # 让物块落地
             sim.simxSetObjectPosition(self.client_id, self.handles['block'], -1, new_position, sim.simx_opmode_oneshot)
-            
+            self.current_Block = self.get_current_position(self.handles['block'])
             return new_position 
         else:
             logging.warning("Failed to get current position of the block.")
@@ -395,6 +411,7 @@ class IRB360Env(gym.Env):
         if self.current_Pad is not None and self.current_Block is not None:
             self.relative_distance = np.array(self.current_Block) - np.array(self.current_Pad)
             self.distance = np.linalg.norm(self.relative_distance)
+
     def check_ik_stability(self):
         """
         检查机械臂的逆运动学求解状态
@@ -413,30 +430,37 @@ class IRB360Env(gym.Env):
             inputFloats=[],
             inputStrings=[],
             inputBuffer=bytearray(),
-            operationMode=sim.simx_opmode_oneshot_wait
+            # operationMode=sim.simx_opmode_oneshot_wait
+            operationMode=sim.simx_opmode_oneshot
+
         )
 
         if result == 0 and ints_ret:
-            ik_status = {
-                'is_stable': ints_ret[0] == 1,
-                'result': ints_ret[0],
-                'message': 'Stable' if ints_ret[0] == 1 else 'Unstable'
-            }
-            
-            print("IK Stability Check:")
-            print(f"Stable: {ik_status['is_stable']}")
-            print(f"Result Code: {ik_status['result']}")
-            print(f"Message: {ik_status['message']}")
-            
-            return ik_status
+            is_stable = ints_ret[0] == 1
+            logging.debug(f"IK Stability Check: Stable: {is_stable}")
+            return is_stable
         else:
-            print("Failed to check IK stability")
-            return {
-                'is_stable': False,
-                'result': None,
-                'message': 'Check failed'
-            }
+            logging.warning("Failed to check IK stability")
+            return False
 
+
+    def check_within_boundary(self, position):
+        """检查末端执行器是否在边界范围内"""
+        if self.current_Boundary is None:
+            return True  # 如果未定义边界，则不限制
+
+        # 计算边界范围
+        boundary_limits = [
+            (self.current_Boundary[i] - self.Boundary_size[i] / 2, self.current_Boundary[i] + self.Boundary_size[i] / 2)
+            for i in range(3)
+        ]
+
+        # 检查每个维度是否在边界范围内
+        for i in range(3):
+            if not (boundary_limits[i][0] <= position[i] <= boundary_limits[i][1]):
+                return False
+        return True
+        
     def render(self):
         """增强的可视化功能"""
         if self.render_mode == 'human':
@@ -469,9 +493,14 @@ class IRB360Env(gym.Env):
             plt.pause(0.1)  # 刷新图像
 
     def stop_simulation(self) -> bool:
-            """停止仿真"""
-            logging.info("Stopping simulation...")
-            return sim.simxStopSimulation(self.client_id, sim.simx_opmode_oneshot_wait) == sim.simx_return_ok
+        """停止仿真"""
+        logging.info("Stopping simulation...")
+        return sim.simxStopSimulation(self.client_id, sim.simx_opmode_oneshot_wait) == sim.simx_return_ok
+    
+    def start_simulation(self) -> bool:
+        """启动仿真"""
+        logging.info("Starting simulation...")
+        return sim.simxStartSimulation(self.client_id, sim.simx_opmode_oneshot_wait) == sim.simx_return_ok
 
     def close(self):
         """增强的关闭功能并保存性能数据"""
@@ -481,3 +510,9 @@ class IRB360Env(gym.Env):
         
         # 关闭连接
         sim.simxFinish(self.client_id)
+        
+    def seed(self,seed = None):
+        """设置随机数种子"""
+        """设置随机数生成器的种子"""
+        self.np_random = np.random.default_rng(seed)
+        return [seed]
