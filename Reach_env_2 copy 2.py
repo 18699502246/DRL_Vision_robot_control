@@ -86,9 +86,9 @@ class IRB360Env(gym.Env):
         
         self.connect()
         # self.stop_simulation()
-        # time.sleep(2)
+        time.sleep(2)
         self.start_simulation()
-        # time.sleep(2)
+        time.sleep(2)
         # 动作和观测空间的定义
         self.action_space = spaces.Discrete(6)
         self.observation_space = spaces.Box(low=-2.0, high=2.0, shape=(17,), dtype=np.float32)
@@ -109,7 +109,7 @@ class IRB360Env(gym.Env):
         # 随机数生成器
         self.np_random = np.random.default_rng()
     
-
+    
     def step(self, action):
         """执行动作
             返回值如下所示：

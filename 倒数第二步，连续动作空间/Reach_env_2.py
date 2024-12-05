@@ -41,11 +41,11 @@ class IRB360Env(gym.Env):
     """
     
     def __init__(self, 
-                 tstep=0.1, 
-                 distance_threshold=0.1,
-                 max_steps=1000,
-                 render_mode=None,
-                 seed=None):
+                tstep=0.1, 
+                distance_threshold=0.1,
+                max_steps=1000,
+                render_mode=None,
+                seed=None):
         """初始化环境参数和连接仿真"""
         super().__init__()
         
@@ -73,7 +73,6 @@ class IRB360Env(gym.Env):
         self.seed(seed)
         self.Boundary_size = [0.9, 0.9, 0.6]  # 边界框的尺寸
 
-        
         # 日志配置
         logging.basicConfig(level=logging.INFO)
         
@@ -83,14 +82,13 @@ class IRB360Env(gym.Env):
         self.script_type = sim.sim_scripttype_childscript
         
         # 连接并设置仿真环境
-        
         self.connect()
         # self.stop_simulation()
-        # time.sleep(2)
+        time.sleep(2)
         self.start_simulation()
-        # time.sleep(2)
+        time.sleep(2)
         # 动作和观测空间的定义
-        self.action_space = spaces.Discrete(6)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-2.0, high=2.0, shape=(17,), dtype=np.float32)
         
         # 初始化句柄和状态
@@ -108,8 +106,11 @@ class IRB360Env(gym.Env):
         
         # 随机数生成器
         self.np_random = np.random.default_rng()
-    
-
+        
+        # 初始化控制器
+        # self.controller = IRB360Controller()
+        # self.controller.connect()
+        # self.controller.start_simulation()
     def step(self, action):
         """执行动作
             返回值如下所示：
@@ -134,19 +135,13 @@ class IRB360Env(gym.Env):
         self.calculate_distances()
         # 时间步计数器 
         self.current_step += 1
-        # 动作映射
-        action_map = {
-            0: 'moveUp', 1: 'moveDown', 
-            2: 'moveLeft', 3: 'moveRight', 
-            4: 'moveForward', 5: 'moveBackward'
-        }
         
-        function_name = action_map.get(action)
-        if not function_name:
-            logging.error("Invalid action")
-            return self.state, 0.0, self.terminated, self.truncated, {}
+        # 动作映射
+        direction = action
+        steps = 50  # 固定步数，可以根据需要调整
+        
         # 执行动作
-        res = self.call_script_function(function_name)
+        res = self.controller.move_to_direction(direction.tolist(), steps)
         
         # 获取新状态
         self.current_Pad = self.get_current_position(self.handles['pad'])
@@ -156,15 +151,13 @@ class IRB360Env(gym.Env):
         ik_status = self.check_ik_stability()
         if not ik_status:
             logging.warning("IK is not stable, truncating current episode and resetting environment.")
-            # self.truncated = True
-            self.call_script_function('moveBackToSafePosition',opmode=sim.simx_opmode_oneshot_wait)  # 安全回退
+            self.call_script_function('moveBackToSafePosition', opmode=sim.simx_opmode_oneshot_wait)  # 安全回退
             return self.state, 0.0, False, True, {'episode_status': 'unstable_ik'}
         
         # 检查末端执行器是否在边界内
         if not self.check_within_boundary(self.current_Pad):
             logging.warning("End effector out of boundary, resetting environment.")
-            # self.truncated = True  # 或者设置 terminated = True
-            self.call_script_function('moveBackToSafePosition',opmode=sim.simx_opmode_oneshot_wait)  # 安全回退
+            self.call_script_function('moveBackToSafePosition', opmode=sim.simx_opmode_oneshot_wait)  # 安全回退
             return self.state, 0.0, False, True, {'episode_status': 'boundary_exceeded'}
 
         
@@ -188,7 +181,7 @@ class IRB360Env(gym.Env):
             'truncated': self.truncated
         }
         
-        return self.state, reward,self.terminated, self.truncated, info
+        return self.state, reward, self.terminated, self.truncated, info
     
     def connect(self):
         """连接到仿真环境"""

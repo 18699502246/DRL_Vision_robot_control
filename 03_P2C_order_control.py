@@ -29,9 +29,8 @@ class IRB360Controller:
         return sim.simxStopSimulation(self.clientID, sim.simx_opmode_oneshot_wait)
 
     # 调用脚本函数
-    def call_script_function(self, function_name, ints=[], floats=[], strings=[], bytes=bytearray()):
-        return sim.simxCallScriptFunction(self.clientID, self.robot_name, self.script_type, function_name, ints, floats, strings, bytes, sim.simx_opmode_oneshot_wait)
-
+    def call_script_function(self, function_name, ints=[], floats=[], strings=[], bytes=bytearray(), opmode=sim.simx_opmode_oneshot_wait):
+        return sim.simxCallScriptFunction(self.clientID, self.robot_name, self.script_type, function_name, ints, floats, strings, bytes, opmode)
     # 获取对象位置
     def get_object_position(self, object_name):
         result, handle = sim.simxGetObjectHandle(self.clientID, object_name, sim.simx_opmode_oneshot_wait)
@@ -43,7 +42,6 @@ class IRB360Controller:
             print(f"Error getting position for {object_name}")
             return None
         return position
-
 
     # 移动机器人
     def move(self, direction):
@@ -57,13 +55,84 @@ class IRB360Controller:
         }.get(direction.lower())
 
         if function_name:
-            
             return self.call_script_function(function_name)
         else:
             print(f"Invalid direction: {direction}")
             return None
 
+    # 移动机器人到指定位置
+    def move_to_position(self, target_position, steps=None):
+        """
+        Move the robot's end-effector to a specified target position using cubic interpolation.
 
+        Args:
+            target_position (list): A list of three floats representing the target position [x, y, z].
+            steps (int, optional): Number of interpolation steps. Defaults to None, which will be determined based on the distance.
+        """
+        # Ensure target_position is a list of three floats
+        if not isinstance(target_position, list) or len(target_position) != 3:
+            raise ValueError("target_position must be a list of three floats [x, y, z].")
+
+        # Convert target_position to floats
+        target_position = [float(coord) for coord in target_position]
+
+        # Ensure steps is an integer if provided
+        if steps is not None and not isinstance(steps, int):
+            raise ValueError("steps must be an integer.")
+
+        # Call the Lua script function 'moveToPosition'
+        res, ret_ints, ret_floats, ret_strings, ret_bytes = self.call_script_function(
+            function_name='moveToPosition',
+            ints=[steps] if steps is not None else [],
+            floats=target_position,
+            opmode=sim.simx_opmode_oneshot_wait
+        )
+
+        if res != sim.simx_return_ok:
+            print(f"Error calling script function 'moveToPosition': {res}")
+            return False
+
+        return True
+    
+ 
+    def move_to_direction(self, target_direction, steps=None):
+        """
+        Move the robot's end-effector to a specified target position using cubic interpolation.
+
+        Args:
+            target_position (list): A list of three floats representing the target position [x, y, z].
+            steps (int, optional): Number of interpolation steps. Defaults to None, which will be determined based on the distance.
+        """
+        # Ensure target_position is a list of three floats
+        if not isinstance(target_direction, list) or len(target_direction) != 3:
+            raise ValueError("target_position must be a list of three floats [x, y, z].")
+
+        # Convert target_position to floats
+        target_direction = [float(coord) for coord in target_direction]
+
+        # Ensure steps is an integer if provided
+        if steps is not None and not isinstance(steps, int):
+            raise ValueError("steps must be an integer.")
+
+         # Call the Lua script function 'move'
+        res, ret_ints, ret_floats, ret_strings, ret_bytes = sim.simxCallScriptFunction(
+            clientID=self.clientID, 
+            scriptDescription=self.robot_name,
+            options=self.script_type,
+            functionName='move_to_direction',
+            inputInts=[steps] if steps is not None else [],
+            inputFloats=target_direction,
+            inputStrings=[],
+            inputBuffer=bytearray(),
+            operationMode=sim.simx_opmode_oneshot_wait
+        )
+
+        if res != sim.simx_return_ok:
+            print(f"Error calling script function 'moveToPosition': {res}")
+            return False
+
+        return True
+    
     def check_ik_stability(self):
         """
         检查机械臂的逆运动学求解状态
@@ -105,6 +174,7 @@ class IRB360Controller:
                 'result': None,
                 'message': 'Check failed'
             }
+
     # 重置机器人位置
     def reset_position(self):
         return self.call_script_function('resetToInitialPosition')
@@ -117,19 +187,17 @@ class IRB360Controller:
     # 设置逆运动学模式
     def set_ik_mode(self, enable):
         function_name = 'setIkMode' if enable else 'setFkMode'
-        # function_name = 'enableIkMode' if enable else 'disableIkMode'
         return self.call_script_function(function_name)
 
-    
-        
     # 关闭连接
     def close(self):
         sim.simxFinish(self.clientID)
+
     def reset_to_initial_position(self):
         print("Resetting to initial position...")
 
         # 调用Lua脚本中的resetToInitialPosition函数
-        result = self.call_script_function('resetPosition')
+        result = self.call_script_function('resetToInitialPosition')
 
         if result == sim.simx_return_ok:  # 检查Lua函数返回值
             print("Reset command sent successfully.")
@@ -152,7 +220,7 @@ class IRB360Controller:
         else:
             print("Failed to reset to initial position.")
             return False
- 
+
 # 主函数，演示如何使用IRB360Controller类
 def main():
     controller = IRB360Controller()
@@ -162,40 +230,24 @@ def main():
     try:
         controller.start_simulation()
         # time.sleep(1)
-        # controller.set_ik_mode(True)
+        controller.set_ik_mode(True)
 
         # 示例操作序列
         controller.move('right')
-        # controller.check_ik_stability()
-        # controller.check_ik_stability()
-        # controller.check_ik_stability()
-
-        # print(controller.move('left'))
-        time.sleep(1)
+        # time.sleep(1)
         move_result = controller.move('up')
         print(move_result)
-        # controller.call_script_function( 'move', ints=[1], floats=[0,0,0.05], strings=[], bytes=bytearray())
-        # controller.call_script_function(function_name='move',floats= [0, 0, 0.05])
-        time.sleep(1)
         controller.control_suction_pad(True)
-        time.sleep(1)
         controller.move('right')
-        time.sleep(1)
         controller.control_suction_pad(False)
-        time.sleep(1)
         controller.set_ik_mode(False)
-        
-        # controller.check_ik_stability()
         controller.set_ik_mode(True)
         controller.move('left')
         controller.move('left')
         controller.move('left')
-        time.sleep(1)
         controller.move('up')
         controller.reset_position()
-        # controller.call_script_function('resetPosition')
-
-        # controller.move2('up')
+        time.sleep(1)
         controller.move('up')
         controller.move('up')
         controller.move('up')
@@ -207,9 +259,16 @@ def main():
         controller.move('up')
         time.sleep(1)
         controller.set_ik_mode(False)
-        # controller.reset_position()
-        # controller.reset_to_initial_position()
         controller.set_ik_mode(True)
+
+        # 使用新的 move_to_position 方法
+        target_position = [0.1, 0.2, -0.8]  # 目标位置 [x, y, z]
+        steps = 500  # 步数
+        controller.move_to_position(target_position, steps)
+        # time.sleep(5)  # 等待移动完成
+        direction = [0.1, 0, 0]  # 向右移动 0.01 单位
+        steps = 50
+        controller.move_to_direction(direction, steps)
         # 获取末端执行器位置
         end_effector_position = controller.get_object_position('irb360_ikTip')
         if end_effector_position:

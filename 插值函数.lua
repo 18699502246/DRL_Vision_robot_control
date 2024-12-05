@@ -2,7 +2,7 @@
 sim = require 'sim'
 
 -- Constants for motion parameters
-local MOVE_STEP = 0.01
+local MOVE_STEP = 0.005
 local MAX_BOUNDARY = 1
 local MIN_BOUNDARY = -1
 local movementCounter = 0
@@ -46,9 +46,9 @@ function initializeParameters()
     targetAngVel = {0, 0, 0, 0}
 
     -- Linear dynamics parameters
-    local linVel = 2  -- 2 meters per second
-    local linAccel = 3  -- 3 meters per second^2
-    local linJerk = 30  -- 30 meters per second^3
+    local linVel = 1  -- 2 meters per second
+    local linAccel = 1.5  -- 3 meters per second^2
+    local linJerk = 15  -- 30 meters per second^3
     currentLinVel = {0, 0, 0, 0}
     currentLinAccel = {0, 0, 0, 0}
     maxLinVel = {linVel, linVel, linVel, linVel}
@@ -127,12 +127,26 @@ function moveCallback(result, currentPos)
 end
 
 -- Movement function
-function move(direction, callback)
-    movementCounter  = movementCounter + 1
+
+function move(direction, callback,steps)
+    callback = callback or moveCallback  -- Use default callback if none provided
+    movementCounter = movementCounter + 1
     if movementCounter % 100 == 0 then
         print(string.format("Movement counter reached 100 times. Current step count: %d", movementCounter))
     end
+
+    -- Ensure direction is a valid table with three elements
+    if type(direction) ~= "table" or #direction ~= 3 then
+        print("Error: Invalid direction parameter.")
+        return
+    end
+
     local currentPos = sim.getObjectPosition(ikModeTipDummy, irb360Base)
+    if type(currentPos) ~= "table" or #currentPos ~= 3 then
+        print("Error: Failed to get current position.")
+        return
+    end
+
     local targetPos = {
         math.max(math.min(currentPos[1] + direction[1], MAX_BOUNDARY), MIN_BOUNDARY),
         math.max(math.min(currentPos[2] + direction[2], MAX_BOUNDARY), MIN_BOUNDARY),
@@ -143,13 +157,105 @@ function move(direction, callback)
         print("Target position is out of bounds. Movement cancelled.")
         return
     end
-    moveLinearInterpolation(currentPos, targetPos, 10)
-    --sim.setObjectPosition(ikModeTipDummy, irb360Base, targetPos)
+
+    local distance = math.sqrt((targetPos[1] - currentPos[1])^2 + 
+                               (targetPos[2] - currentPos[2])^2 + 
+                               (targetPos[3] - currentPos[3])^2)
+    steps = steps or (distance > 0.1 and 50 or 20)
+    cubicInterpolation(currentPos, targetPos, steps)
+    local result = sim.handleIkGroup(mainIkTask)
+    callback(result, currentPos)
+end
+
+-- Movement function with target direction
+function move_to_direction(direction, steps)
+    -- Debugging information
+    callback =moveCallback  -- Use default callback if none provided
+    movementCounter = movementCounter + 1
+    if movementCounter % 100 == 0 then
+        print(string.format("Movement counter reached 100 times. Current step count: %d", movementCounter))
+    end
+    print("Target Position:", direction)
+    print("Steps:", steps)
+
+    -- Check if parameters are swapped
+    if type(direction) == "table" and #direction == 1 and type(direction[1]) == "number" and
+       type(steps) == "table" and #steps == 3 and type(steps[1]) == "number" and type(steps[2]) == "number" and type(steps[3]) == "number" then
+        -- Swap parameters
+        local temp = direction
+        direction = steps
+        steps = temp[1]
+        print("Swapped Target Position:", direction)
+        print("Swapped Steps:", steps)
+    end
+
+    -- Validate parameters
+    if type(direction) ~= "table" or #direction ~= 3 or type(steps) ~= "number" or steps <= 0 then
+        print("Invalid parameters in moveToPosition")
+        return false
+    end
+
+    -- Get current position
+    local currentPos = sim.getObjectPosition(ikModeTipDummy, irb360Base)
+    if type(currentPos) ~= "table" or #currentPos ~= 3 then
+        print("Failed to get current position")
+        return false
+    end
+    local targetPos = {
+        math.max(math.min(currentPos[1] + direction[1], MAX_BOUNDARY), MIN_BOUNDARY),
+        math.max(math.min(currentPos[2] + direction[2], MAX_BOUNDARY), MIN_BOUNDARY),
+        math.max(math.min(currentPos[3] + direction[3], MAX_BOUNDARY), MIN_BOUNDARY)
+    }
+
+    if targetPos[1] == currentPos[1] and targetPos[2] == currentPos[2] and targetPos[3] == currentPos[3] then
+        print("Target position is out of bounds. Movement cancelled.")
+        return
+    end
+
+    local distance = math.sqrt((targetPos[1] - currentPos[1])^2 + 
+                               (targetPos[2] - currentPos[2])^2 + 
+                               (targetPos[3] - currentPos[3])^2)
+    steps = steps or (distance > 0.1 and 50 or 20)
+    cubicInterpolation(currentPos, targetPos, steps)
     local result = sim.handleIkGroup(mainIkTask)
     callback(result, currentPos)
 end
 
 -- Control suction pad function
+-- Movement function with target position
+-- Movement function with target position
+function moveToPosition(targetPos, steps)
+    -- Debugging information
+    print("Initial Target Position:", targetPos)
+    print("Initial Steps:", steps)
+
+    -- Check if parameters are swapped
+    if type(targetPos) == "table" and #targetPos == 1 and type(targetPos[1]) == "number" and
+       type(steps) == "table" and #steps == 3 and type(steps[1]) == "number" and type(steps[2]) == "number" and type(steps[3]) == "number" then
+        -- Swap parameters
+        local temp = targetPos
+        targetPos = steps
+        steps = temp[1]
+        print("Swapped Target Position:", targetPos)
+        print("Swapped Steps:", steps)
+    end
+
+    -- Validate parameters
+    if type(targetPos) ~= "table" or #targetPos ~= 3 or type(steps) ~= "number" or steps <= 0 then
+        print("Invalid parameters in moveToPosition")
+        return false
+    end
+
+    -- Get current position
+    local currentPos = sim.getObjectPosition(ikModeTipDummy, irb360Base)
+    if type(currentPos) ~= "table" or #currentPos ~= 3 then
+        print("Failed to get current position")
+        return false
+    end
+
+    cubicInterpolation(currentPos, targetPos, steps)
+    return true
+end
 function controlSuctionPad(active)
 
     local scriptHandle = sim.getScriptHandle('suctionPad')
@@ -177,7 +283,6 @@ function sysCall_threadmain()
 end
 -- Cleanup function to be called on script termination
 function sysCall_cleanup()
-
     -- Cleanup code can be added here if needed
 end
 
@@ -216,16 +321,46 @@ function moveBack()
     --print("direction",direction)
     --move({0,0,direction[3]}, moveCallback)
     --resetToInitialPosition()
-    move(direction, moveCallback)
+    move(direction, moveCallback,500)
+    
     print("backward")
     return {},{},{},''
 end
+local lastSafePosition = nil
 
 
+function moveBackToSafePosition()
+    local ZeroPos=INITIAL_WORLD_POSITIONS
+    print("Zeropos",ZeroPos)
+    local CurrentWorldPos = sim.getObjectPosition(suctionDummy, -1)
+    print("CurrentWorldPos",CurrentWorldPos)
+    local direction = {
+        CurrentWorldPos[1] - ZeroPos[1],
+        CurrentWorldPos[2] - ZeroPos[2],
+        CurrentWorldPos[3] - ZeroPos[3]
+    }
+    -- Normalize the direction vector if necessary
+    local magnitude = math.sqrt(direction[1]^2 + direction[2]^2 + direction[3]^2)    
+    if magnitude > 0 then
+        direction = {direction[1] / magnitude, direction[2] / magnitude, direction[3] / magnitude}
+    end
+    --print("direction",direction)
+    -- Scale the direction by the move step
+    direction = {direction[1] * 0.1, direction[2] * 0.1, direction[3] * 0.1}
+    --direction = {direction[1] * 0.01, direction[2] * MOVE_STEP, direction[3] * MOVE_STEP}
+    --print("direction",direction)
+    --move({0,0,direction[3]}, moveCallback)
+    --resetToInitialPosition()
+    move(direction, moveCallback)
+    
+    print("backward")
+    return {},{},{},''
+   
+end
 function moveUp()
 
     print("moveUp called")
-    move({0, 0, MOVE_STEP}, moveCallback)
+    move({0, 0, MOVE_STEP})
     print("up")
     return {},{},{},''
 end
@@ -289,18 +424,25 @@ function disableIkMode()
     setFkMode()
     return {0}
 end
-function moveLinearInterpolation(currentPos, targetPos, steps)
-    local delta = {
-        (targetPos[1] - currentPos[1]) / steps,
-        (targetPos[2] - currentPos[2]) / steps,
-        (targetPos[3] - currentPos[3]) / steps
-    }
+
+
+
+function cubicInterpolation(currentPos, targetPos, steps)
     local newPos = {currentPos[1], currentPos[2], currentPos[3]}
-    for i=1, steps do
-        newPos[1] = newPos[1] + delta[1]
-        newPos[2] = newPos[2] + delta[2]
-        newPos[3] = newPos[3] + delta[3]
+    local delta = {
+        targetPos[1] - currentPos[1],
+        targetPos[2] - currentPos[2],
+        targetPos[3] - currentPos[3]
+    }
+
+    for i = 1, steps do
+        local t = i / steps
+        local t3 = t * t * t
+        newPos[1] = currentPos[1] + delta[1] * (3 * t3 - 2 * t * t)
+        newPos[2] = currentPos[2] + delta[2] * (3 * t3 - 2 * t * t)
+        newPos[3] = currentPos[3] + delta[3] * (3 * t3 - 2 * t * t)
         sim.setObjectPosition(ikModeTipDummy, irb360Base, newPos)
-        --sim.switchThread() 
+        --print(string.format("Step %d: Position = [%.3f, %.3f, %.3f]", i, newPos[1], newPos[2], newPos[3]))
+        sim.switchThread()
     end
 end
