@@ -349,7 +349,7 @@ class IRB360Env(gym.Env):
                 velocity = (np.array(current_position) - np.array(self.last_Pad)) / dt
                 self.last_Pad = current_position
                 self.last_time = current_time
-                print(f"Calculated Velocity: {velocity}")
+                # print(f"Calculated Velocity: {velocity}")
                 return velocity
         
         self.last_Pad = current_position
